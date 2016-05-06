@@ -3,7 +3,7 @@ var fs = require('fs');
 var mkdirp = require('mkdirp');
 var path = require('path');
 var utilities = require('./utilities');
-var taskQueue = require('./task-queue-c');
+var taskQueue = require('./task-queue-d');
 var downloadCompleted = 0;
 var spidered = 0;
 
@@ -40,8 +40,10 @@ function download(url, filename, callback) {
   console.log('Downloading ' + url);
   request(url, function(err, response, body) {
     if (err) {
+      console.log('Error no download: ', err);
       return callback(err);
     }
+    console.log('HTTP Status - ', response.statusCode);
     saveFile(filename, body, function(err) {
       console.log('Downloaded and saved: ' + url);
       downloadCompleted++;
@@ -76,43 +78,36 @@ function spiderLinks(currentUrl, body, nesting, callback) {
   console.log('nesting: ' + nesting + ' - url: ' + currentUrl);
   console.log('links: ', links);
 
-  // function next(link, done) {
-  //   spider(link, nesting - 1, done);
-  // }
-
-  try {
-    limitedParallel(links, 10, function(link, done){
-      spider(link, nesting - 1, done);   
-    }, callback);
-  } catch (e) {
-    console.log(e);
-  }
-}
-
-function limitedParallel(collection, concurrency, iterator, callback) {
-  console.log('concurrency: ', concurrency);
   var completed = 0,
     errored = false;
 
-  taskQueue.start(collection, concurrency, function(link, next) {
-    iterator(link, function(err) {
+  var downloadQueue = taskQueue.queue(function(taskData, done) {
+    console.log('downloadQueue callback - taskData: ', taskData);
+    console.log('done: ', done);
+    spider(taskData.link, taskData.nesting - 1, done);
+  }, 10);
+
+  links.forEach(function(link) {
+    var taskData = {
+      link: link,
+      nesting: nesting
+    };
+
+    downloadQueue.push(taskData, function(err) {
       if (err) {
         errored = true;
         return callback(err);
       }
 
-      if (++completed === collection.length && !errored) {
-        callback();
-      } else {
-        console.log('completed: ', completed);
-        next();
+      if (++completed === links.length && !errored) {
+        console.log('Concluded all links');
+        setImmediate(callback);
       }
-
     });
   });
 }
 
-spider(process.argv[2], 2, function(err, filename) {
+spider(process.argv[2], 2, function(err) {
   if (err) {
     console.log(err);
   } else {
