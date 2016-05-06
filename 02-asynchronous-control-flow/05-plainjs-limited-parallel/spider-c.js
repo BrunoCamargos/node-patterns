@@ -3,17 +3,18 @@ var fs = require('fs');
 var mkdirp = require('mkdirp');
 var path = require('path');
 var utilities = require('./utilities');
-var downloaded = 0;
+var taskQueue = require('./task-queue-b');
+var downloadCompleted = 0;
 var spidered = 0;
 
 var spidering = {}; // race condition
 function spider(url, nesting, callback) {
-    if(spidering[url]) {
+  if (spidering[url]) {
     return process.nextTick(callback);
   }
 
   spidering[url] = true;
-console.log('spidered : ', ++spidered);
+
   var filename = utilities.urlToFilename(url);
   fs.readFile(filename, 'utf8', function(err, body) {
     if (err) {
@@ -36,15 +37,15 @@ console.log('spidered : ', ++spidered);
 }
 
 function download(url, filename, callback) {
-  // console.log('Downloading ' + url);
+  console.log('Downloading ' + url);
   request(url, function(err, response, body) {
     if (err) {
       return callback(err);
     }
     saveFile(filename, body, function(err) {
       console.log('Downloaded and saved: ' + url);
-      downloaded++;
-      console.log('downloaded: ', downloaded, err);
+      downloadCompleted++;
+      console.log('downloadCompleted: ', downloadCompleted, err);
       if (err) {
         return callback(err);
       }
@@ -68,29 +69,45 @@ function spiderLinks(currentUrl, body, nesting, callback) {
   }
 
   var links = utilities.getPageLinks(currentUrl, body);
-  if(links.length === 0) {
+  if (links.length === 0) {
     return process.nextTick(callback);
   }
-  
-  // console.log('nesting: ' + nesting + ' - url: ' + currentUrl);
-  console.log('current url ', currentUrl,' links: ', links.length);
 
+  console.log('nesting: ' + nesting + ' - url: ' + currentUrl);
+  console.log('links: ', links);
+
+  function iterator(link, done) {
+    console.log('iterator');
+    spider(link, nesting - 1, done);
+  }
+
+  try {
+    limitedParallel(links, 10, iterator, callback);
+  } catch (e) {
+    console.log(e);
+  }
+}
+
+function limitedParallel(collection, concurrency, iterator, callback) {
+  console.log('concurrency: ', concurrency);
   var completed = 0,
     errored = false;
 
-  function done(err) {
-    if (err) {
-      errored = true;
-      return callback(err);
-    }
+  taskQueue.start(collection, concurrency, function(link, next) {
+    iterator(link, function(err) {
+      if (err) {
+        errored = true;
+        return callback(err);
+      }
 
-    if (++completed === links.length && !errored) {
-      return callback();
-    }
-  }
+      if (++completed === collection.length && !errored) {
+        callback();
+      } else {
+        console.log('completed: ', completed);
+        next();
+      }
 
-  links.forEach(function(link) {
-    spider(link, nesting - 1, done);
+    });
   });
 }
 
